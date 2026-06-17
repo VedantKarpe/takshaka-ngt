@@ -1,9 +1,11 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { GameStateService } from '../core/game-state.service';
 
 /**
- * MobileControlsComponent — a touch D-pad + Venom/Nectar buttons for phones.
- * Forwards into the same {@link GameStateService} input the keyboard uses.
+ * MobileControlsComponent — a touch thumbstick + Venom/Nectar buttons for
+ * phones. Dragging the stick feeds an analog direction into the same
+ * {@link GameStateService} input the keyboard uses; the model moves AND turns to
+ * follow the thumb, so there are no fiddly arrow keys to aim for.
  * Hidden on pointer-capable (desktop) devices via media query.
  */
 @Component({
@@ -11,15 +13,12 @@ import { GameStateService } from '../core/game-state.service';
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="pad">
-      <button class="dir up"
-        (pointerdown)="dir('up', true)" (pointerup)="dir('up', false)" (pointerleave)="dir('up', false)">▲</button>
-      <button class="dir left"
-        (pointerdown)="dir('left', true)" (pointerup)="dir('left', false)" (pointerleave)="dir('left', false)">◄</button>
-      <button class="dir right"
-        (pointerdown)="dir('right', true)" (pointerup)="dir('right', false)" (pointerleave)="dir('right', false)">►</button>
-      <button class="dir down"
-        (pointerdown)="dir('down', true)" (pointerup)="dir('down', false)" (pointerleave)="dir('down', false)">▼</button>
+    <div #base class="stick"
+      (pointerdown)="grab($event)"
+      (pointermove)="drag($event)"
+      (pointerup)="release($event)"
+      (pointercancel)="release($event)">
+      <div class="knob" [style.transform]="knob()"></div>
     </div>
     <div class="modes">
       <button class="mode venom" (pointerdown)="toggle('venom')">V</button>
@@ -27,29 +26,63 @@ import { GameStateService } from '../core/game-state.service';
     </div>
   `,
   styles: [`
-    .pad, .modes { position: fixed; bottom: 24px; z-index: 12; touch-action: none; }
-    .pad { left: 24px; width: 150px; height: 150px; }
-    .modes { right: 24px; display: flex; gap: 14px; }
-    .dir {
-      position: absolute; width: 48px; height: 48px; border-radius: 8px;
-      background: rgba(20,12,6,0.6); border: 1px solid var(--stone);
-      color: var(--fire-dim); font-size: 1rem;
+    .stick, .modes { position: fixed; bottom: 28px; z-index: 12; touch-action: none; }
+    .stick {
+      left: 28px; width: 140px; height: 140px; border-radius: 50%;
+      background: rgba(20,12,6,0.45); border: 1px solid var(--stone);
     }
-    .dir.up { top: 0; left: 51px; }
-    .dir.left { top: 51px; left: 0; }
-    .dir.right { top: 51px; right: 0; }
-    .dir.down { bottom: 0; left: 51px; }
+    .knob {
+      position: absolute; top: 50%; left: 50%; width: 52px; height: 52px;
+      margin: -26px 0 0 -26px; border-radius: 50%;
+      background: rgba(40,24,12,0.85); border: 1px solid var(--fire-dim);
+      box-shadow: 0 0 12px rgba(0,0,0,0.5); will-change: transform;
+    }
+    .modes { right: 24px; display: flex; gap: 14px; }
     .mode {
       width: 56px; height: 56px; border-radius: 50%; font-family: 'Cinzel', serif;
       background: rgba(20,12,6,0.6); font-size: 1.1rem;
     }
     .mode.venom { border: 1px solid var(--venom); color: var(--venom); }
     .mode.nectar { border: 1px solid var(--nectar); color: var(--nectar); }
-    @media (hover: hover) and (pointer: fine) { .pad, .modes { display: none; } }
+    @media (hover: hover) and (pointer: fine) { .stick, .modes { display: none; } }
   `],
 })
 export class MobileControlsComponent {
   private readonly game = inject(GameStateService);
-  dir(d: 'up' | 'down' | 'left' | 'right', on: boolean): void { this.game.setDirection(d, on); }
+  private readonly base = viewChild.required<ElementRef<HTMLDivElement>>('base');
+
+  /** Max knob travel from centre, in px (keeps the knob inside the base). */
+  private static readonly R = 44;
+
+  private active = false;
+  readonly knob = signal('translate(0px, 0px)');
+
+  grab(e: PointerEvent): void {
+    this.active = true;
+    this.base().nativeElement.setPointerCapture(e.pointerId);
+    this.drag(e);
+  }
+
+  drag(e: PointerEvent): void {
+    if (!this.active) return;
+    const r = this.base().nativeElement.getBoundingClientRect();
+    let dx = e.clientX - (r.left + r.width / 2);
+    let dy = e.clientY - (r.top + r.height / 2);
+    const len = Math.hypot(dx, dy);
+    const R = MobileControlsComponent.R;
+    if (len > R) { dx = (dx / len) * R; dy = (dy / len) * R; }
+    this.knob.set(`translate(${dx}px, ${dy}px)`);
+    // Screen-up (negative dy) is forward; right (positive dx) is strafe-right.
+    this.game.setStick(dx / R, -dy / R);
+  }
+
+  release(e: PointerEvent): void {
+    if (!this.active) return;
+    this.active = false;
+    this.base().nativeElement.releasePointerCapture(e.pointerId);
+    this.knob.set('translate(0px, 0px)');
+    this.game.setStick(0, 0);
+  }
+
   toggle(m: 'venom' | 'nectar'): void { this.game.sim.toggleMode(m); }
 }

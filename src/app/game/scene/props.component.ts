@@ -3,6 +3,8 @@ import {
 } from '@angular/core';
 import { injectBeforeRender, NgtArgs } from 'angular-three';
 import * as THREE from 'three';
+import { mergeBufferGeometries } from 'three-stdlib';
+import { WORLD_MAX_X, WORLD_MAX_Y, WORLD_MIN_X, WORLD_MIN_Y } from '../../core/models';
 import { g2w } from './coords';
 import { toonGradient } from './toon';
 
@@ -16,7 +18,6 @@ interface Prop {
 interface Tree { pos: [number, number, number]; h: number; r: number; }
 interface Brazier { pos: [number, number, number]; }
 interface Rock { pos: [number, number, number]; s: number; rotY: number; color: string; }
-interface Grass { pos: [number, number, number]; h: number; }
 
 /** Tiny deterministic PRNG so the ruins look identical every load. */
 function mulberry32(seed: number): () => number {
@@ -104,23 +105,8 @@ function mulberry32(seed: number): () => number {
       </ngt-mesh>
     }
 
-    <!-- Grass tufts (3 blades each) -->
-    @for (g of grass; track $index) {
-      <ngt-group [position]="g.pos">
-        <ngt-mesh [position]="[0, g.h / 2, 0]" [rotation]="[0, 0, 0.1]">
-          <ngt-cone-geometry *args="[2, g.h, 4]" />
-          <ngt-mesh-toon-material color="#3c5a2c" [gradientMap]="toon" />
-        </ngt-mesh>
-        <ngt-mesh [position]="[3, g.h * 0.42, 1]" [rotation]="[0.2, 0, -0.25]">
-          <ngt-cone-geometry *args="[1.6, g.h * 0.8, 4]" />
-          <ngt-mesh-toon-material color="#46663a" [gradientMap]="toon" />
-        </ngt-mesh>
-        <ngt-mesh [position]="[-3, g.h * 0.4, -1]" [rotation]="[-0.2, 0, 0.3]">
-          <ngt-cone-geometry *args="[1.6, g.h * 0.75, 4]" />
-          <ngt-mesh-toon-material color="#34502b" [gradientMap]="toon" />
-        </ngt-mesh>
-      </ngt-group>
-    }
+    <!-- Grass: one instanced mesh for the whole map (single draw call) -->
+    <ngt-primitive *args="[grass]" />
 
     <!-- Trees (trunk + canopy) -->
     @for (t of trees; track $index) {
@@ -143,7 +129,8 @@ export class PropsComponent {
   readonly props: Prop[] = [];
   readonly trees: Tree[] = [];
   readonly rocks: Rock[] = [];
-  readonly grass: Grass[] = [];
+  /** All grass tufts across the whole map, drawn as one instanced mesh. */
+  readonly grass: THREE.InstancedMesh;
   readonly lamps: [number, number, number][] = [];
 
   private readonly flames = viewChildren<ElementRef<THREE.PointLight>>('flame');
@@ -208,24 +195,18 @@ export class PropsComponent {
       this.trees.push({ pos: g2w(x, y, 0), h: 70 + rng() * 60, r: 26 + rng() * 18 });
     }
 
-    // Scattered rocks (everywhere, including paths — purely visual).
+    // Scattered rocks (everywhere, including paths — purely visual). A few
+    // larger boulders plus lots of small stones to break up the open field.
     const rockCols = ['#6a6258', '#787064', '#5e564c'];
-    for (let i = 0; i < 26; i++) {
+    for (let i = 0; i < 64; i++) {
       const x = -220 + rng() * 1340;
       const y = -180 + rng() * 1040;
-      this.rocks.push({ pos: g2w(x, y, 3), s: 5 + rng() * 12, rotY: rng() * Math.PI, color: rockCols[(rng() * 3) | 0] });
+      // Most are pebbles; ~1 in 5 is a chunkier boulder.
+      const s = rng() < 0.2 ? 11 + rng() * 13 : 4 + rng() * 7;
+      this.rocks.push({ pos: g2w(x, y, s * 0.3), s, rotY: rng() * Math.PI, color: rockCols[(rng() * 3) | 0] });
     }
 
-    // Grass tufts, denser around the outer ruins.
-    for (let i = 0; i < 30; i++) {
-      let x = 0, y = 0;
-      for (let a = 0; a < 6; a++) {
-        x = -200 + rng() * 1300;
-        y = -160 + rng() * 1000;
-        if (!inAltar(x, y)) break;
-      }
-      this.grass.push({ pos: g2w(x, y, 0), h: 11 + rng() * 9 });
-    }
+    this.grass = this.buildGrass(rng, inAltar);
 
     // Flicker the brazier + lamp flames for a living dusk.
     injectBeforeRender(({ clock }) => {
@@ -239,5 +220,61 @@ export class PropsComponent {
         lamps[i].nativeElement.intensity = 1.5 + Math.sin(t * 9 + i * 2.3) * 0.35;
       }
     });
+  }
+
+  /**
+   * Build ALL grass as one {@link THREE.InstancedMesh}: a merged 3-blade tuft
+   * geometry drawn once, instanced sparsely across the entire map. Per-instance
+   * matrix (position / random yaw / height-and-width scale — taller, thinner
+   * ones read as weeds) and per-instance HSL tint give a varied meadow at the
+   * cost of a single draw call and no outline-hull overhead.
+   */
+  private buildGrass(rng: () => number, inAltar: (x: number, y: number) => boolean): THREE.InstancedMesh {
+    const H = 16; // base tuft height; per-instance Y-scale varies it.
+    const blade = (r: number, h: number, x: number, y: number, z: number, rx: number, rz: number) => {
+      const g = new THREE.ConeGeometry(r, h, 4);
+      g.rotateX(rx); g.rotateZ(rz); g.translate(x, y, z);
+      return g;
+    };
+    const tuftGeo = mergeBufferGeometries([
+      blade(2,   H,        0,  H * 0.5,  0,  0,    0.1),
+      blade(1.6, H * 0.8,  3,  H * 0.42, 1,  0.2, -0.25),
+      blade(1.6, H * 0.75, -3, H * 0.4, -1, -0.2,  0.3),
+    ])!;
+
+    // Tuft positions (sim space): a sparse blanket over the FULL map, plus a
+    // little extra across the arena the player actually walks.
+    const spots: [number, number][] = [];
+    const scatter = (n: number, sx: number, sw: number, sy: number, sh: number) => {
+      for (let i = 0; i < n; i++) {
+        const x = sx + rng() * sw, y = sy + rng() * sh;
+        if (!inAltar(x, y)) spots.push([x, y]);
+      }
+    };
+    scatter(560, WORLD_MIN_X + 30, WORLD_MAX_X - WORLD_MIN_X - 60, WORLD_MIN_Y + 30, WORLD_MAX_Y - WORLD_MIN_Y - 60);
+    scatter(190, -100, 1100, -100, 880); // arena + immediate surrounds
+
+    const mesh = new THREE.InstancedMesh(
+      tuftGeo, new THREE.MeshToonMaterial({ gradientMap: toonGradient }), spots.length,
+    );
+    mesh.frustumCulled = false;       // one mesh spans the whole map
+    mesh.userData['outline'] = true;  // opt out of the inverted-hull outline pass
+
+    const dummy = new THREE.Object3D();
+    const col = new THREE.Color();
+    for (let i = 0; i < spots.length; i++) {
+      const [sx, sy] = spots[i];
+      const [wx, , wz] = g2w(sx, sy);
+      const weed = rng() < 0.16;
+      dummy.position.set(wx, 0, wz);
+      dummy.rotation.set(0, rng() * Math.PI * 2, 0);
+      dummy.scale.set(weed ? 0.55 : 0.85 + rng() * 0.5, weed ? 1.3 + rng() * 0.7 : 0.7 + rng() * 0.6, weed ? 0.55 : 0.85 + rng() * 0.5);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      col.setHSL(0.24 + rng() * 0.13, 0.38 + rng() * 0.26, 0.26 + rng() * 0.14);
+      mesh.setColorAt(i, col);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    return mesh;
   }
 }

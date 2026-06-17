@@ -9,10 +9,16 @@ import { cx, cz } from './coords';
 import { toonGradient } from './toon';
 
 /**
- * FiresComponent — the sacred fires at the centre of the yagna. Emissive hazard
- * volumes: a glowing sphere + a flickering PointLight whose radius pulses on the
- * fire's `ph` phase (the same phase the sim uses for its damage radius). Count
- * is fixed (5) by the level data.
+ * FiresComponent — the sacred fires at the centre of the yagna.
+ *
+ * Each fire is a stylised low-poly flame rather than a single blob: a flattened
+ * bed of glowing coals, then three faceted cones (deep-orange outer envelope →
+ * amber mid → white-hot core). The cones spin at different rates and flicker
+ * their height on the fire's `ph` phase (the same phase the sim uses for its
+ * damage radius), so the facets catch the cel bands and read as licking flame.
+ * A flickering PointLight pulses on the same phase. Count is fixed (5) by the
+ * level data; all flame materials are transparent so the outline pass skips them
+ * and the post-FX bloom makes them glow.
  */
 @Component({
   selector: 'app-fires',
@@ -23,13 +29,35 @@ import { toonGradient } from './toon';
   template: `
     @for (f of fires; track $index) {
       <ngt-group #grp [position]="[cxv(f.x), 0, czv(f.y)]">
-        <ngt-mesh [position]="[0, f.r * 0.5, 0]">
-          <ngt-sphere-geometry *args="[f.r, 16, 16]" />
+        <!-- glowing coals / embers at the base -->
+        <ngt-mesh [position]="[0, f.r * 0.12, 0]" [scale]="[1, 0.45, 1]">
+          <ngt-icosahedron-geometry *args="[f.r * 0.8, 0]" />
           <ngt-mesh-toon-material
-            #mat color="#ff7a2a" [emissive]="'#ff7700'" [emissiveIntensity]="2.2"
-            [gradientMap]="toon" [toneMapped]="false" [transparent]="true" [opacity]="0.92" />
+            color="#ff5a1e" [emissive]="'#ff3a00'" [emissiveIntensity]="1.6"
+            [gradientMap]="toon" [toneMapped]="false" [transparent]="true" [opacity]="0.95" />
         </ngt-mesh>
-        <ngt-point-light #light [position]="[0, f.r, 0]" [distance]="f.r * 9" [color]="'#ff7722'" [intensity]="3" />
+        <!-- outer flame envelope -->
+        <ngt-mesh [position]="[0, f.r * 1.2, 0]">
+          <ngt-cone-geometry *args="[f.r * 0.95, f.r * 2.4, 7, 1]" />
+          <ngt-mesh-toon-material
+            color="#ff6a00" [emissive]="'#ff5200'" [emissiveIntensity]="2.0"
+            [gradientMap]="toon" [toneMapped]="false" [transparent]="true" [opacity]="0.78" />
+        </ngt-mesh>
+        <!-- amber mid flame -->
+        <ngt-mesh [position]="[0, f.r * 0.98, 0]">
+          <ngt-cone-geometry *args="[f.r * 0.62, f.r * 1.95, 6, 1]" />
+          <ngt-mesh-toon-material
+            color="#ffae1a" [emissive]="'#ff9500'" [emissiveIntensity]="2.6"
+            [gradientMap]="toon" [toneMapped]="false" [transparent]="true" [opacity]="0.88" />
+        </ngt-mesh>
+        <!-- white-hot core -->
+        <ngt-mesh [position]="[0, f.r * 0.74, 0]">
+          <ngt-cone-geometry *args="[f.r * 0.36, f.r * 1.5, 5, 1]" />
+          <ngt-mesh-toon-material
+            color="#ffe27a" [emissive]="'#ffd24a'" [emissiveIntensity]="3.2"
+            [gradientMap]="toon" [toneMapped]="false" [transparent]="true" [opacity]="0.96" />
+        </ngt-mesh>
+        <ngt-point-light [position]="[0, f.r, 0]" [distance]="f.r * 9" [color]="'#ff7722'" [intensity]="3" />
       </ngt-group>
     }
   `,
@@ -39,8 +67,6 @@ export class FiresComponent {
   protected get fires() { return this.game.sim.state.fires; }
 
   private readonly grps = viewChildren<ElementRef<THREE.Group>>('grp');
-  private readonly mats = viewChildren<ElementRef<THREE.MeshToonMaterial>>('mat');
-  private readonly lights = viewChildren<ElementRef<THREE.PointLight>>('light');
 
   cxv = cx; czv = cz;
   readonly toon = toonGradient;
@@ -52,18 +78,29 @@ export class FiresComponent {
   private sync(): void {
     const fires = this.game.sim.state.fires;
     const grps = this.grps();
-    const mats = this.mats();
-    const lights = this.lights();
+    const t = performance.now() * 0.001;
     for (let i = 0; i < grps.length && i < fires.length; i++) {
-      const f = fires[i];
-      const flick = 1 + Math.sin(f.ph) * 0.18;
+      const ph = fires[i].ph;
       const grp = grps[i].nativeElement;
-      grp.scale.setScalar(flick);
-      grp.rotation.y = f.ph * 0.3;
-      const mat = mats[i]?.nativeElement;
-      if (mat) mat.emissiveIntensity = 2.0 + Math.sin(f.ph * 1.7) * 0.6;
-      const light = lights[i]?.nativeElement;
-      if (light) light.intensity = 2.6 + Math.sin(f.ph * 2.1) * 1.0;
+      // Whole-fire breathing.
+      grp.scale.setScalar(1 + Math.sin(ph) * 0.06);
+      // children: [0] coals, [1] outer, [2] mid, [3] core, [4] light.
+      const ch = grp.children;
+      for (let L = 1; L <= 3; L++) {
+        const m = ch[L] as THREE.Mesh | undefined;
+        if (!m) continue;
+        // Each cone spins at its own rate so the facets shimmer out of sync…
+        m.rotation.y = t * (0.6 + L * 0.55) + ph + L;
+        // …and stretches/squashes vertically to lick upward.
+        m.scale.y = 1 + Math.sin(t * (3 + L) + ph + L) * (0.22 - L * 0.04);
+      }
+      const core = ch[3] as THREE.Mesh | undefined;
+      if (core) {
+        (core.material as THREE.MeshToonMaterial).emissiveIntensity =
+          2.8 + Math.sin(ph * 2.0 + t * 4) * 0.8;
+      }
+      const light = ch[4] as THREE.PointLight | undefined;
+      if (light?.isPointLight) light.intensity = 2.6 + Math.sin(ph * 2.1 + t * 3) * 1.0;
     }
   }
 }

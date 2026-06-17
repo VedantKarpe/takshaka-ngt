@@ -43,6 +43,13 @@ export class GameStateService {
   /** Raw movement intent (camera-relative semantics: fwd/back/strafe). */
   private readonly intent = { fwd: false, back: false, left: false, right: false };
 
+  /**
+   * Analog touch thumbstick intent (screen-space: x = strafe-right,
+   * y = forward), each component in [-1, 1]. Takes precedence over `intent`
+   * while engaged so a phone player gets smooth, any-angle movement.
+   */
+  private readonly stick = { x: 0, y: 0, active: false };
+
   /** Drained-event listeners (audio, etc.). */
   private eventSinks: ((e: SimEvent) => void)[] = [];
   onEvent(fn: (e: SimEvent) => void): void { this.eventSinks.push(fn); }
@@ -132,10 +139,16 @@ export class GameStateService {
     }
   }
 
-  /** Touch / virtual control. */
-  setDirection(dir: 'up' | 'down' | 'left' | 'right', on: boolean): void {
-    const map = { up: 'fwd', down: 'back', left: 'left', right: 'right' } as const;
-    this.intent[map[dir]] = on;
+  /**
+   * Analog touch thumbstick. `x` = strafe-right, `y` = forward, each in
+   * [-1, 1] (the knob's normalised offset from its base). The model both moves
+   * and turns to follow this vector — see {@link applyMovement}. Pass (0, 0) to
+   * release.
+   */
+  setStick(x: number, y: number): void {
+    this.stick.x = x;
+    this.stick.y = y;
+    this.stick.active = x !== 0 || y !== 0;
   }
 
   /**
@@ -148,8 +161,9 @@ export class GameStateService {
    */
   applyMovement(camYaw: number): void {
     const i = this.intent;
-    const fb = (i.fwd ? 1 : 0) - (i.back ? 1 : 0);
-    const lr = (i.right ? 1 : 0) - (i.left ? 1 : 0);
+    // Analog thumbstick wins while engaged; otherwise fall back to keys/flags.
+    const fb = this.stick.active ? this.stick.y : (i.fwd ? 1 : 0) - (i.back ? 1 : 0);
+    const lr = this.stick.active ? this.stick.x : (i.right ? 1 : 0) - (i.left ? 1 : 0);
     let dx: number, dy: number;
     if (this.cameraMode() === 'third') {
       // forward = (cos camYaw, sin camYaw); screen-right = (-sin, cos).
