@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Tiro+Devanagari+Sanskrit&family=Cinzel:wght@400;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --fire:       #ff8800;
+  --fire-dim:   #aa4400;
+  --fire-glow:  rgba(255, 120, 0, 0.4);
+  --fire-deep:  #3c1e08;
+  --naga:       #4488ff;
+  --naga-dim:   #224466;
+  --naga-glow:  rgba(68, 136, 255, 0.4);
+  --venom:      #aaff00;
+  --nectar:     #88ccff;
+  --bg:         #070402;
+  --surface:    #0e0704;
+  --gold:       #ffd700;
+  --gold-dim:   #aa8800;
+  --stone:      #2a1a0a;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Share Tech Mono', monospace;
+  color: var(--gold);
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--fire-deep); }
+
+button { cursor: pointer; font-family: 'Share Tech Mono', monospace; }
+button:focus { outline: none; }
+
+@keyframes flameGlow {
+  0%, 100% { text-shadow: 0 0 14px var(--fire-glow), 0 0 32px rgba(255,70,0,0.3); }
+  50%       { text-shadow: 0 0 6px rgba(255,140,0,0.4); }
+}
+@keyframes nagaGlow {
+  0%, 100% { text-shadow: 0 0 14px var(--naga-glow), 0 0 30px rgba(68,100,255,0.25); }
+  50%       { text-shadow: 0 0 5px rgba(68,136,255,0.3); }
+}
+@keyframes pulseAlert {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
